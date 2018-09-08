@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"github.com/butlermatt/waxmoth/msg"
 	"net"
 	"os"
 	"strings"
@@ -12,7 +13,7 @@ import (
 
 type RemoteClient struct {
 	address string
-	data    chan<- *Message
+	data    chan<- *msg.Message
 }
 
 type Message struct {
@@ -27,13 +28,13 @@ func main() {
 	addresses := strings.Split(*a, ",")
 	fmt.Println("Received addresses: ", addresses)
 
-	data := make(chan *Message)
+	data := make(chan *msg.Message)
 	for _, addr := range addresses {
 		go readRemote(&RemoteClient{addr, data})
 	}
 
-	for line := range data {
-		fmt.Printf("%s - %s\n", line.origin, line.raw)
+	for m := range data {
+		fmt.Printf("%+v\n", m)
 	}
 }
 
@@ -45,6 +46,9 @@ func readRemote(rc *RemoteClient) {
 	}
 	defer conn.Close()
 
+	parser := make(chan *msg.Raw)
+	go msg.ParseChannel(parser, rc.data)
+
 	buf := bufio.NewReader(conn)
 	for {
 		data, err := buf.ReadBytes('\n')
@@ -52,6 +56,8 @@ func readRemote(rc *RemoteClient) {
 			fmt.Fprintf(os.Stderr, "failed to read bytes on %q: %v\n", rc.address, err)
 			continue
 		}
-		rc.data <- &Message{bytes.TrimSpace(data), rc.address}
+
+		rm := &msg.Raw{Origin: rc.address, Data: bytes.TrimSpace(data)}
+		parser <- rm
 	}
 }

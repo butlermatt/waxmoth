@@ -1,14 +1,18 @@
 package msg
 
 import (
-	"errors"
+	"bytes"
+	"fmt"
+	"github.com/pkg/errors"
+	"os"
+	"strconv"
 	"time"
 )
 
 const (
 	// Various indexes of data
 	msgType = iota // Message type
-	tType          // Transmission type. MSG type only
+	txType         // Transmission type. MSG type only
 	_              // Session Id. Don't care
 	_              // Aircraft ID. Don't care (usually 11111)
 	icao           // ModeS or ICAO Hex number
@@ -33,26 +37,26 @@ const (
 	onGround     // Flag to indicate ground squawk switch is active
 )
 
-type MsgType int
+type Type int
 
 const (
-	Invalid MsgType = iota // Invalid message type
-	Sel                    // Selection Change Message (should never see)
-	Id                     // New ID Message (When callsign is set or changed)
-	Air                    // New aircraft message (Should never see)
-	Sta                    // Status Change Message (Should never see)
-	Clk                    // Click message (Should never see)
-	Msg                    // Transmission Message (Almost every message seen)
+	Invalid Type = iota // Invalid message type
+	Sel                 // Selection Change Message (should never see)
+	Id                  // New ID Message (When callsign is set or changed)
+	Air                 // New aircraft message (Should never see)
+	Sta                 // Status Change Message (Should never see)
+	Clk                 // Click message (Should never see)
+	Msg                 // Transmission Message (Almost every message seen)
 )
 
 type Raw struct {
-	origin string
-	data   string
+	Origin string
+	Data   []byte
 }
 
 type Message struct {
 	Station   string    // Station reporting the message.
-	Type      MsgType   // Type is the MsgType of the message (should always bee Msg)
+	Type      Type      // Type is the MsgType of the message (should always bee Msg)
 	TxType    uint8     // TxType is the transmission type of the message. Only for Msg types.
 	Icao      uint      // Icao is identification number assigned to the plane by the International Civil Aviation Organization
 	GenDate   time.Time // GenDate is the DateTime the message was generated
@@ -74,16 +78,87 @@ type Message struct {
 // ParseChannel is designed to be run as a goroutine, accepting an inbound and outbound channel for the messages. The
 // inbound channel consists of Raw messages received from the station. Outbound consists of parsed Messages.
 func ParseChannel(in <-chan *Raw, out chan<- *Message) {
+	for rm := range in {
+		m, err := Parse(rm.Origin, rm.Data)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to parse message: %q. error - %v\n", rm.Data, err)
+			continue
+		}
 
+		out <- m
+	}
 }
 
 // Parse accepts a raw message string and origin, and returns a pointer to a Message, or an error.
-func Parse(station string, message string) (*Message, error) {
-	return nil, errors.New("not yet implemented")
+func Parse(station string, message []byte) (*Message, error) {
+	msg := &Message{Station: station}
+
+	parts := bytes.Split(message, []byte(","))
+	if len(parts) != 22 {
+		return nil, fmt.Errorf("message contains incorrect number of parts. expected=22, got=%d", len(parts))
+	}
+
+	msg.Type = parseType(parts[msgType])
+	if msg.Type == Msg {
+		val, err := strconv.ParseUint(string(parts[txType]), 10, 8)
+		if err != nil {
+			return nil, errors.Wrap(err, "unable to parse TxType")
+		}
+		msg.TxType = uint8(val)
+	}
+
+	val, err := strconv.ParseUint(string(parts[icao]), 16, 32)
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to parse ICAO number")
+	}
+	msg.Icao = uint(val)
+
+	d, err := parseDateTime(parts[dGen : tGen+1])
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to parse generated date")
+	}
+	msg.GenDate = d
+	d, err = parseDateTime(parts[dLog : tLog+1])
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to parse logged date")
+	}
+
+	if msg.Type == Sel || msg.Type == Id {
+		msg.CallSign = string(parts[callSign])
+	}
+
+	if msg.Type != Msg {
+		return msg, nil
+	}
+
+	switch msg.TxType {
+	case 1:
+		msg.CallSign = string(parts[callSign])
+	case 2:
+		err = parseMsg2(msg, parts)
+	case 3:
+		err = parseMsg3(msg, parts)
+	case 4:
+		err = parseMsg4(msg, parts)
+	case 5:
+		err = parseMsg5(msg, parts)
+	case 6:
+		err = parseMsg6(msg, parts)
+	case 7:
+		err = parseMsg7(msg, parts)
+	case 8:
+		err = parseMsg8(msg, parts)
+	}
+
+	if err != nil {
+		return nil, errors.Wrapf(err, "unable to parse msg type: %d", msg.TxType)
+	}
+
+	return msg, nil
 }
 
-func parseType(s string) MsgType {
-	switch s {
+func parseType(s []byte) Type {
+	switch string(s) {
 	case "SEL":
 		return Sel
 	case "ID":
@@ -98,4 +173,164 @@ func parseType(s string) MsgType {
 		return Msg
 	}
 	return Invalid
+}
+
+const dateForm = "2006/01/02 15:04:05.999999999"
+
+func parseDateTime(s [][]byte) (time.Time, error) {
+	var d, t string
+	if len(s) != 2 {
+		return time.Time{}, errors.Errorf("wrong size arguments. slice len expected=2 got=%d", len(s))
+	}
+
+	d = string(s[0])
+	if len(s[1]) > 18 {
+		// SBS-1 BaseStation format will sometimes add more nanosecond precision
+		// than go can handle so trim it if needed.
+		t = string(s[1][0:18])
+	} else {
+		t = string(s[1])
+	}
+
+	date, err := time.Parse(dateForm, d+" "+t)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return date, nil
+}
+
+func parseMsg2(m *Message, parts [][]byte) error {
+	alt, err := strconv.ParseInt(string(parts[alt]), 10, strconv.IntSize)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse altitude")
+	}
+	m.Altitude = int(alt)
+
+	f, err := strconv.ParseFloat(string(parts[groundSpeed]), 32)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse ground speed")
+	}
+	m.Speed = float32(f)
+
+	f, err = strconv.ParseFloat(string(parts[track]), 32)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse track")
+	}
+	m.Track = float32(f)
+
+	f, err = strconv.ParseFloat(string(parts[latitude]), 64)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse latitude")
+	}
+	m.Latitude = f
+
+	f, err = strconv.ParseFloat(string(parts[longitude]), 64)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse longitude")
+	}
+	m.Longitude = f
+
+	m.OnGround = string(parts[onGround]) == "1"
+
+	return nil
+}
+
+func parseMsg3(m *Message, parts [][]byte) error {
+	alt, err := strconv.ParseInt(string(parts[alt]), 10, strconv.IntSize)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse altitude")
+	}
+	m.Altitude = int(alt)
+
+	f, err := strconv.ParseFloat(string(parts[latitude]), 64)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse latitude")
+	}
+	m.Latitude = f
+
+	f, err = strconv.ParseFloat(string(parts[longitude]), 64)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse longitude")
+	}
+	m.Longitude = f
+
+	m.Alert = string(parts[squawkAlert]) == "1"
+	m.Emerg = string(parts[emergency]) == "1"
+	m.SPI = string(parts[identActive]) == "1"
+	m.OnGround = string(parts[onGround]) == "1"
+
+	return nil
+}
+
+func parseMsg4(m *Message, parts [][]byte) error {
+	f, err := strconv.ParseFloat(string(parts[groundSpeed]), 32)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse ground speed")
+	}
+	m.Speed = float32(f)
+
+	f, err = strconv.ParseFloat(string(parts[track]), 32)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse track")
+	}
+	m.Track = float32(f)
+
+	i, err := strconv.ParseInt(string(parts[verticalRate]), 10, strconv.IntSize)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse vertical rate")
+	}
+	m.Vertical = int(i)
+
+	return nil
+}
+
+func parseMsg5(m *Message, parts [][]byte) error {
+	alt, err := strconv.ParseInt(string(parts[alt]), 10, strconv.IntSize)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse altitude")
+	}
+	m.Altitude = int(alt)
+
+	m.Alert = string(parts[squawkAlert]) == "1"
+	m.SPI = string(parts[identActive]) == "1"
+	m.OnGround = string(parts[onGround]) == "1"
+
+	return nil
+}
+
+func parseMsg6(m *Message, parts [][]byte) error {
+	alt, err := strconv.ParseInt(string(parts[alt]), 10, strconv.IntSize)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse altitude")
+	}
+	m.Altitude = int(alt)
+
+	i, err := strconv.ParseUint(string(parts[squawk]), 10, 16)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse squawk")
+	}
+	m.Squawk = uint16(i)
+
+	m.Alert = string(parts[squawkAlert]) == "1"
+	m.Emerg = string(parts[emergency]) == "1"
+	m.SPI = string(parts[identActive]) == "1"
+	m.OnGround = string(parts[onGround]) == "1"
+
+	return nil
+}
+
+func parseMsg7(m *Message, parts [][]byte) error {
+	alt, err := strconv.ParseInt(string(parts[alt]), 10, strconv.IntSize)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse altitude")
+	}
+	m.Altitude = int(alt)
+
+	m.OnGround = string(parts[onGround]) == "1"
+	return nil
+}
+
+func parseMsg8(m *Message, parts [][]byte) error {
+	m.OnGround = string(parts[onGround]) == "1"
+	return nil
 }
