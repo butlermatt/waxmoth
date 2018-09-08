@@ -3,10 +3,11 @@ package msg
 import (
 	"bytes"
 	"fmt"
-	"github.com/pkg/errors"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/pkg/errors"
 )
 
 const (
@@ -263,23 +264,29 @@ func parseMsg3(m *Message, parts [][]byte) error {
 }
 
 func parseMsg4(m *Message, parts [][]byte) error {
-	f, err := strconv.ParseFloat(string(parts[groundSpeed]), 32)
-	if err != nil {
-		return errors.Wrap(err, "failed to parse ground speed")
+	if len(parts[groundSpeed]) > 0 {
+		f, err := strconv.ParseFloat(string(parts[groundSpeed]), 32)
+		if err != nil {
+			return errors.Wrap(err, "failed to parse ground speed")
+		}
+		m.Speed = float32(f)
 	}
-	m.Speed = float32(f)
 
-	f, err = strconv.ParseFloat(string(parts[track]), 32)
-	if err != nil {
-		return errors.Wrap(err, "failed to parse track")
+	if len(parts[track]) > 0 {
+		f, err := strconv.ParseFloat(string(parts[track]), 32)
+		if err != nil {
+			return errors.Wrap(err, "failed to parse track")
+		}
+		m.Track = float32(f)
 	}
-	m.Track = float32(f)
 
-	i, err := strconv.ParseInt(string(parts[verticalRate]), 10, strconv.IntSize)
-	if err != nil {
-		return errors.Wrap(err, "failed to parse vertical rate")
+	if len(parts[verticalRate]) > 0 {
+		i, err := strconv.ParseInt(string(parts[verticalRate]), 10, strconv.IntSize)
+		if err != nil {
+			return errors.Wrap(err, "failed to parse vertical rate")
+		}
+		m.Vertical = int(i)
 	}
-	m.Vertical = int(i)
 
 	return nil
 }
@@ -299,11 +306,13 @@ func parseMsg5(m *Message, parts [][]byte) error {
 }
 
 func parseMsg6(m *Message, parts [][]byte) error {
-	alt, err := strconv.ParseInt(string(parts[alt]), 10, strconv.IntSize)
-	if err != nil {
-		return errors.Wrap(err, "failed to parse altitude")
+	if len(parts[alt]) > 0 {
+		alt, err := strconv.ParseInt(string(parts[alt]), 10, strconv.IntSize)
+		if err != nil {
+			return errors.Wrap(err, "failed to parse altitude")
+		}
+		m.Altitude = int(alt)
 	}
-	m.Altitude = int(alt)
 
 	i, err := strconv.ParseUint(string(parts[squawk]), 10, 16)
 	if err != nil {

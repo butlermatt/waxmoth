@@ -5,10 +5,11 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"github.com/butlermatt/waxmoth/msg"
 	"net"
 	"os"
 	"strings"
+
+	"github.com/butlermatt/waxmoth/msg"
 )
 
 type RemoteClient struct {
