@@ -55,25 +55,29 @@ type Raw struct {
 	Data   []byte
 }
 
+type Location struct {
+	Latitude  float64 // Latitude position of the aircraft
+	Longitude float64 // Longitude position of the aircraft
+}
+
 type Message struct {
-	Station   string    // Station reporting the message.
-	Type      Type      // Type is the MsgType of the message (should always bee Msg)
-	TxType    uint8     // TxType is the transmission type of the message. Only for Msg types.
-	Icao      uint      // Icao is identification number assigned to the plane by the International Civil Aviation Organization
-	GenDate   time.Time // GenDate is the DateTime the message was generated
-	LogDate   time.Time // LogDate is the DateTime the message was logged by the Station.
-	CallSign  string    // CallSign being broadcast by the aircraft
-	Altitude  int       // Altitude of the aircraft (relative to 1013.2mb pressure)
-	Speed     float32   // Speed over ground (not indicative of airspeed)
-	Track     float32   // Track of aircraft, derived from velocity E/W and velocity N/S
-	Latitude  float64   // Latitude position of aircraft.
-	Longitude float64   // Longitude position of aircraft.
-	Vertical  int       // Vertical rate of climb or decent (64ft resolution?)
-	Squawk    uint16    // Squawk assigned to the aircraft and entered by them for each airspace.
-	Alert     bool      // Alert indicates that the Squawk has changed.
-	Emerg     bool      // Emerg indicates the emergency code has been set.
-	SPI       bool      // SPI indicates the Ident transponder has been activated.
-	OnGround  bool      // OnGround indicates if the aircraft is reporting being on the ground.
+	Station  string    // Station reporting the message.
+	Type     Type      // Type is the MsgType of the message (should always bee Msg)
+	TxType   uint8     // TxType is the transmission type of the message. Only for Msg types.
+	Icao     uint      // Icao is identification number assigned to the plane by the International Civil Aviation Organization
+	GenDate  time.Time // GenDate is the DateTime the message was generated
+	LogDate  time.Time // LogDate is the DateTime the message was logged by the Station.
+	CallSign string    // CallSign being broadcast by the aircraft
+	Altitude int       // Altitude of the aircraft (relative to 1013.2mb pressure)
+	Speed    float32   // Speed over ground (not indicative of airspeed)
+	Track    float32   // Track of aircraft, derived from velocity E/W and velocity N/S
+	Location Location  // Location is the GPS location of the aircraft.
+	Vertical int       // Vertical rate of climb or decent (64ft resolution?)
+	Squawk   uint16    // Squawk assigned to the aircraft and entered by them for each airspace.
+	Alert    bool      // Alert indicates that the Squawk has changed.
+	Emerg    bool      // Emerg indicates the emergency code has been set.
+	SPI      bool      // SPI indicates the Ident transponder has been activated.
+	OnGround bool      // OnGround indicates if the aircraft is reporting being on the ground.
 }
 
 // ParseChannel is designed to be run as a goroutine, accepting an inbound and outbound channel for the messages. The
@@ -123,6 +127,7 @@ func Parse(station string, message []byte) (*Message, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to parse logged date")
 	}
+	msg.LogDate = d
 
 	if msg.Type == Sel || msg.Type == Id {
 		msg.CallSign = string(parts[callSign])
@@ -219,17 +224,15 @@ func parseMsg2(m *Message, parts [][]byte) error {
 	}
 	m.Track = float32(f)
 
-	f, err = strconv.ParseFloat(string(parts[latitude]), 64)
+	lat, err := strconv.ParseFloat(string(parts[latitude]), 64)
 	if err != nil {
 		return errors.Wrap(err, "failed to parse latitude")
 	}
-	m.Latitude = f
-
-	f, err = strconv.ParseFloat(string(parts[longitude]), 64)
+	lon, err := strconv.ParseFloat(string(parts[longitude]), 64)
 	if err != nil {
 		return errors.Wrap(err, "failed to parse longitude")
 	}
-	m.Longitude = f
+	m.Location = Location{Latitude: lat, Longitude: lon}
 
 	m.OnGround = string(parts[onGround]) == "1"
 
@@ -243,17 +246,16 @@ func parseMsg3(m *Message, parts [][]byte) error {
 	}
 	m.Altitude = int(alt)
 
-	f, err := strconv.ParseFloat(string(parts[latitude]), 64)
+	lat, err := strconv.ParseFloat(string(parts[latitude]), 64)
 	if err != nil {
 		return errors.Wrap(err, "failed to parse latitude")
 	}
-	m.Latitude = f
 
-	f, err = strconv.ParseFloat(string(parts[longitude]), 64)
+	lon, err := strconv.ParseFloat(string(parts[longitude]), 64)
 	if err != nil {
 		return errors.Wrap(err, "failed to parse longitude")
 	}
-	m.Longitude = f
+	m.Location = Location{Latitude: lat, Longitude: lon}
 
 	m.Alert = string(parts[squawkAlert]) == "1"
 	m.Emerg = string(parts[emergency]) == "1"

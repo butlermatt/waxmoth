@@ -35,7 +35,8 @@ func main() {
 	}
 
 	for m := range data {
-		fmt.Printf("%+v\n", m)
+		//fmt.Printf("%s: %x %v\n", m.Station, m.Icao, m.GenDate)
+		msg.AddMessage(m)
 	}
 }
 
